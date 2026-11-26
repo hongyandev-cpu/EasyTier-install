@@ -22,9 +22,14 @@
 | `client` 客户端 | 建 TUN 加入网络，连接中继，不监听 | 是 | 否 | `client.conf` / `easytier@client` |
 | `hybrid` 混合 | 建 TUN 加入网络，同时监听端口给其他节点中继 | 是 | 是 | `hybrid.conf` / `easytier@hybrid` |
 
-脚本安装时逐项询问，**所有业务参数都没有预设默认值**，需要你自己输入：模式、网络名、网络密钥、端口、实例名、hostname、machine_id；客户端和混合模式还要输入中继地址、虚拟 IP、TUN 设备名。
+脚本安装时按模式最小化询问，**业务参数没有预设默认值**：
 
-需要自动化时可用 `--mode`、`--network-name`、`--version` 等参数，详见：
+- 所有模式：选择模式、输入网络名、端口。
+- 客户端 / 混合模式：再输入网络密钥、中继节点地址，并选择 DHCP 或静态 IP（选静态 IP 时再填虚拟 IP）。
+
+实例名、hostname、machine_id、TUN 设备名由脚本按模式自动生成，无需输入。
+
+需要自动化时可用 `--mode`、`--network-name`、`--version`、`--ipv4` 或 `--dhcp` 等参数，详见：
 
 ```bash
 bash install.sh help

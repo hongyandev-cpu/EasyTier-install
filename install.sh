@@ -49,11 +49,8 @@ HELP() {
   echo "  --network-secret SECRET      网络密钥"
   echo "  --relay-host HOST            要连接的中继域名/IP（客户端/混合）"
   echo "  --relay-port PORT            中继/监听端口，TCP+UDP 同端口"
-  echo "  --ipv4 IP                    虚拟 IP（客户端/混合，全网唯一）"
-  echo "  --instance-name NAME         实例名，决定配置文件名和服务实例名"
-  echo "  --node-hostname NAME         节点 hostname"
-  echo "  --machine-id ID              节点 machine_id（全网唯一）"
-  echo "  --dev-name NAME              TUN 设备名（客户端/混合）"
+  echo "  --ipv4 IP                    使用静态虚拟 IP（客户端/混合）"
+  echo "  --dhcp                       使用 DHCP 分配虚拟 IP（客户端/混合）"
   echo "  --token TOKEN                GitHub token（可选，用于 API 限流）"
   echo "  --skip-folder-verify         安装目录非空时也继续"
   echo "  --skip-folder-fix            不自动在安装路径后追加 /easytier"
@@ -84,10 +81,11 @@ NETWORK_SECRET=""
 RELAY_HOST=""
 RELAY_PORT=""
 IPV4=""
+DHCP_MODE=""
 INSTANCE_NAME=""
 NODE_HOSTNAME=""
 MACHINE_ID=""
-DEV_NAME=""
+DEV_NAME="tun0"
 TOKEN=""
 SKIP_FOLDER_VERIFY=false
 SKIP_FOLDER_FIX=false
@@ -121,18 +119,7 @@ while [ $# -gt 0 ]; do
     --ipv4)
       [ -n "${2:-}" ] || die "--ipv4 需要参数"
       IPV4="$2"; shift ;;
-    --instance-name)
-      [ -n "${2:-}" ] || die "--instance-name 需要参数"
-      INSTANCE_NAME="$2"; shift ;;
-    --node-hostname)
-      [ -n "${2:-}" ] || die "--node-hostname 需要参数"
-      NODE_HOSTNAME="$2"; shift ;;
-    --machine-id)
-      [ -n "${2:-}" ] || die "--machine-id 需要参数"
-      MACHINE_ID="$2"; shift ;;
-    --dev-name)
-      [ -n "${2:-}" ] || die "--dev-name 需要参数"
-      DEV_NAME="$2"; shift ;;
+    --dhcp) DHCP_MODE="true" ;;
     --token)
       [ -n "${2:-}" ] || die "--token 需要参数"
       TOKEN="$2"; shift ;;
@@ -293,40 +280,52 @@ COLLECT_INPUT() {
   esac
 
   NETWORK_NAME=${NETWORK_NAME:-$(ask_required "网络名称")}
-  NETWORK_SECRET=${NETWORK_SECRET:-$(ask_required "网络密钥（建议 openssl rand -base64 16 生成）")}
-  RELAY_PORT=${RELAY_PORT:-$(ask_required "端口（TCP/UDP 同端口）")}
   validate_value "$NETWORK_NAME" "网络名称"
-  validate_value "$NETWORK_SECRET" "网络密钥"
-  case "$RELAY_PORT" in
-    '' | *[!0-9]*) die "端口必须是数字" ;;
-  esac
-  if [ "$RELAY_PORT" -lt 1 ] || [ "$RELAY_PORT" -gt 65535 ]; then
-    die "端口必须在 1-65535 之间"
-  fi
-
-  INSTANCE_NAME=${INSTANCE_NAME:-$(ask_required "实例名")}
-  NODE_HOSTNAME=${NODE_HOSTNAME:-$(ask_required "节点 hostname")}
-  MACHINE_ID=${MACHINE_ID:-$(ask_required "节点 machine_id（全网唯一）")}
-  validate_value "$INSTANCE_NAME" "实例名"
-  validate_value "$NODE_HOSTNAME" "hostname"
-  validate_value "$MACHINE_ID" "machine_id"
 
   if [ "$MODE" = "relay" ]; then
-    # 中继不需要中继地址、虚拟 IP 和 TUN 设备名
+    # 中继不加入虚拟网络，不需要密钥、中继地址和虚拟 IP
+    NETWORK_SECRET=""
+    RELAY_HOST=""
+    IPV4=""
+    DHCP_MODE=""
     CONFIG_NAME="default"
+    RELAY_PORT=${RELAY_PORT:-$(ask_required "端口（TCP/UDP 同端口）")}
   else
-    RELAY_HOST=${RELAY_HOST:-$(ask_required "要连接的中继域名或公网 IP")}
-    IPV4=${IPV4:-$(ask_required "虚拟 IP（全网唯一）")}
-    DEV_NAME=${DEV_NAME:-$(ask_required "TUN 设备名")}
+    NETWORK_SECRET=${NETWORK_SECRET:-$(ask_required "网络密钥（建议 openssl rand -base64 16 生成）")}
+    RELAY_HOST=${RELAY_HOST:-$(ask_required "中继节点地址（域名或公网 IP）")}
+    RELAY_PORT=${RELAY_PORT:-$(ask_required "端口（TCP/UDP 同端口）")}
+    validate_value "$NETWORK_SECRET" "网络密钥"
     validate_value "$RELAY_HOST" "中继地址"
-    validate_value "$DEV_NAME" "TUN 设备名"
-    if ! [[ "$IPV4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-      die "虚拟 IP 格式不正确: $IPV4"
+
+    if [ -n "$IPV4" ] && [ "$DHCP_MODE" = "true" ]; then
+      die "--ipv4 与 --dhcp 不能同时使用"
     fi
-    IFS='.' read -r o1 o2 o3 o4 <<< "$IPV4"
-    for o in "$o1" "$o2" "$o3" "$o4"; do
-      [ "$o" -le 255 ] 2>/dev/null || die "虚拟 IP 含非法段: $IPV4"
-    done
+
+    if [ -z "$IPV4" ] && [ "$DHCP_MODE" != "true" ]; then
+      [ -t 0 ] || die "非交互环境请用 --ipv4 或 --dhcp 指定 IP 方式"
+      while true; do
+        read -r -p "IP 方式 [1] DHCP [2] 静态 IP: " ip_choice
+        case "$ip_choice" in
+          1 | dhcp) DHCP_MODE="true"; IPV4=""; break ;;
+          2 | static) DHCP_MODE="false"; IPV4=$(ask_required "虚拟 IP（全网唯一）"); break ;;
+          *) echo "无效输入，请重新选择" ;;
+        esac
+      done
+    fi
+
+    if [ -n "$IPV4" ]; then
+      DHCP_MODE="false"
+      if ! [[ "$IPV4" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        die "虚拟 IP 格式不正确: $IPV4"
+      fi
+      IFS='.' read -r o1 o2 o3 o4 <<< "$IPV4"
+      for o in "$o1" "$o2" "$o3" "$o4"; do
+        [ "$o" -le 255 ] 2>/dev/null || die "虚拟 IP 含非法段: $IPV4"
+      done
+    else
+      DHCP_MODE="true"
+    fi
+
     if [ "$MODE" = "hybrid" ]; then
       CONFIG_NAME="hybrid"
     else
@@ -334,11 +333,36 @@ COLLECT_INPUT() {
     fi
   fi
 
+  case "$RELAY_PORT" in
+    '' | *[!0-9]*) die "端口必须是数字" ;;
+  esac
+  if [ "$RELAY_PORT" -lt 1 ] || [ "$RELAY_PORT" -gt 65535 ]; then
+    die "端口必须在 1-65535 之间"
+  fi
+
+  # 实例名、hostname、machine_id、TUN 设备名均按模式自动生成
+  case "$MODE" in
+    relay) INSTANCE_NAME="easytier-relay" ;;
+    client) INSTANCE_NAME="easytier-client" ;;
+    hybrid) INSTANCE_NAME="easytier-hybrid" ;;
+  esac
+  NODE_HOSTNAME=$(hostname 2>/dev/null | tr -c 'A-Za-z0-9_-' '-')
+  NODE_HOSTNAME=${NODE_HOSTNAME%-}
+  NODE_HOSTNAME=${NODE_HOSTNAME:-easytier-node}
+  MACHINE_ID="${NODE_HOSTNAME}-${MODE}"
+  DEV_NAME="tun0"
+
   CONFIG_FILE="$INSTALL_PATH/config/${CONFIG_NAME}.conf"
   SERVICE="easytier@${CONFIG_NAME}"
 }
 
 WRITE_CONFIG() {
+  IP_LINES="dhcp = true"
+  if [ "$DHCP_MODE" != "true" ]; then
+    IP_LINES="ipv4 = \"$IPV4\"
+dhcp = false"
+  fi
+
   case "$MODE" in
     relay)
       cat > "$CONFIG_FILE" <<EOF
@@ -364,8 +388,7 @@ instance_name = "$INSTANCE_NAME"
 hostname = "$NODE_HOSTNAME"
 machine_id = "$MACHINE_ID"
 
-ipv4 = "$IPV4"
-dhcp = false
+$IP_LINES
 listeners = []
 exit_nodes = []
 rpc_portal = ""
@@ -381,7 +404,7 @@ uri = "tcp://${RELAY_HOST}:${RELAY_PORT}"
 uri = "udp://${RELAY_HOST}:${RELAY_PORT}"
 
 [flags]
-disable_p2p = true
+disable_p2p = false
 dev_name = "$DEV_NAME"
 EOF
       ;;
@@ -391,8 +414,7 @@ instance_name = "$INSTANCE_NAME"
 hostname = "$NODE_HOSTNAME"
 machine_id = "$MACHINE_ID"
 
-ipv4 = "$IPV4"
-dhcp = false
+$IP_LINES
 listeners = [
     "tcp://0.0.0.0:${RELAY_PORT}",
     "udp://0.0.0.0:${RELAY_PORT}",
@@ -413,7 +435,7 @@ uri = "udp://${RELAY_HOST}:${RELAY_PORT}"
 [flags]
 no_tun = false
 relay_network_whitelist = "$NETWORK_NAME"
-disable_p2p = true
+disable_p2p = false
 dev_name = "$DEV_NAME"
 EOF
       ;;
@@ -579,7 +601,11 @@ SUCCESS() {
   fi
   if [ "$MODE" != "relay" ]; then
     echo "  中继    : tcp://${RELAY_HOST}:${RELAY_PORT}"
-    echo "  虚拟 IP : $IPV4"
+    if [ "$DHCP_MODE" = "true" ]; then
+      echo "  IP 方式 : DHCP"
+    else
+      echo "  虚拟 IP : $IPV4"
+    fi
     echo "  TUN     : $DEV_NAME"
   fi
   echo
@@ -594,7 +620,7 @@ SUCCESS() {
   if [ "$MODE" != "relay" ]; then
     echo "  ip a show ${DEV_NAME}"
     echo "  ping <对端虚拟IP>"
-    echo -e "${YELLOW_COLOR}验证通过后可删除配置里的 disable_p2p = true 以允许直连${RES}"
+    echo -e "${YELLOW_COLOR}P2P 已默认开启；如打洞失败会自动回退到中继${RES}"
   fi
   echo
 }
