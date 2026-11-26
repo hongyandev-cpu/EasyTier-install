@@ -46,7 +46,7 @@ bash install.sh help
 ## 安装
 
 ```bash
-curl -fsSL "https://git.rao.jx.cn/hongyan/EasyTier/raw/branch/main/install.sh" -o /tmp/easytier-install.sh
+curl -fsSL "https://github.com/hongyandev-cpu/EasyTier-install/blob/main/install.sh" -o /tmp/easytier-install.sh
 sudo bash /tmp/easytier-install.sh install
 ```
 
